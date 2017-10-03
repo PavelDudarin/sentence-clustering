@@ -941,6 +941,8 @@ def clusterNoise(m, noise_output_file, path, prefix, suffix, start_th, vectors_f
 
     classifyIndicators(hdbscan_results_file, vectors_file, noise_output_file)    
 
+#--------------------------------------------------------------------------
+
 def mergeClusteredNoise(hdbscan_results_classified_file, noise_output_file, merged_file):
     pkl_file = open(hdbscan_results_classified_file+".pkl", "rb")
     inds = pickle.load(pkl_file)
@@ -972,6 +974,7 @@ def mergeClusteredNoise(hdbscan_results_classified_file, noise_output_file, merg
     output.close()
 
 #--------------------------------------------------------------------------
+
 def extractKeyterms(term_extractor, merged_file, keyterms_file):
     pkl_file = open(merged_file+".pkl", "rb")
     inds = pickle.load(pkl_file)
@@ -1002,6 +1005,7 @@ def extractKeyterms(term_extractor, merged_file, keyterms_file):
     print("Cluster keyterms saved in ", keyterms_file)
     
 #--------------------------------------------------------------------------
+
 
 def main():
     m = Mystem()
