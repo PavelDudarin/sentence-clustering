@@ -23,6 +23,8 @@ import gensim
 from gensim.models.keyedvectors import KeyedVectors
 import hdbscan
 from rutermextract import TermExtractor
+import experiments_config as exp_conf
+import common_units as cu
 
 #one-time download
 try:
@@ -152,8 +154,10 @@ def createIndicatorsDataset(m, stemmer, max_inds_count, stopwords_file, in_file,
     
     tags_file = open(tags_dict_file)
     tags_dict = { line.split()[0] : line.split()[1] for line in tags_file }
-    tags_file.close()    
-    
+    tags_file.close()
+
+    print("Кол-во элементов в tags_dict: ", len(tags_dict))
+
     # List of indicators
     inds = []
     inds_dict = {}
@@ -167,8 +171,12 @@ def createIndicatorsDataset(m, stemmer, max_inds_count, stopwords_file, in_file,
         sample_list = random.sample(inds_list, max_inds_count)
     else:
         sample_list = inds_list[0:max_inds_count]
-    
+
+    print("Кол-во элементов в sample_list: ", len(sample_list))
+
     for i, line in sample_list:
+        print('Process', i, "элемент")
+        #TODO выводить проценты загрузки
         if type(line) == str and len(line) > 0:
             new_line = line.translate(dd)
             new_line = correctSpelling(new_line).upper()      
@@ -503,7 +511,7 @@ def doGraphHierarchicalClustering(th, max_inds_count, graph_file_name_pref, hier
     th_step = 0.005 # шаг рекурсии по уничтожению ребер
     th_max = 0.99 # максимальный уровень до которого уничтожаем ребра
     max_depth = 1000 #максимальная глубина рекурсии
-    avg_bouquet = 3 # целевое количество подузлов в дереве
+    avg_bouquet = 5 # целевое количество подузлов в дереве
     
     min_subgraph_coeff = 0.9 #коэффициент при котором субграф добавляется в иерархию, если <=1 то все слова будут в субграфе
     keywords_cnt = 10 #количество ключевых слов определяющих узел
@@ -746,6 +754,8 @@ def getRelatedIndicatorsByNode(nodes, sphere_graph_file, clustering_results_file
 def lognormal(x, mu, sigma):
     return (1 / (sigma*x*math.sqrt(2*math.pi)) )* math.exp(-1/2*((math.log(x)-mu)/sigma)**2)
 
+#--------------------------------------------------------------------------
+
 def clusterIndicators(hier_graph_file, clustering_results_file, 
                           hdbscan_results_file, min_cluster_size):
     # load graph
@@ -789,28 +799,80 @@ def clusterIndicators(hier_graph_file, clustering_results_file,
     
     output = open(hdbscan_results_file+".pkl", "wb")
     pickle.dump(cl_inds, output)
-    output.close()    
-    
+    output.close()
+
+
 #--------------------------------------------------------------------------
-def makeAverageVector(vectors, weights = None):
-    n_vectors = len(vectors)
-    if not weights:
-        weights = np.ones(n_vectors)
-    avg_vector = np.multiply(vectors[0], weights[0])
-    if n_vectors > 1:
-        for i in range(1,n_vectors):
-            avg_vector = np.add(avg_vector, np.multiply(vectors[i], weights[i]))
-    return np.divide(avg_vector, n_vectors)
 
-def getIdf(tokenized_documents):
-    idf_values = {}
-    all_tokens_set = set([item for sublist in tokenized_documents for item in sublist])
-    for tkn in all_tokens_set:
-        contains_token = map(lambda doc: tkn in doc, tokenized_documents)
-        idf_values[tkn] = 1 + math.log(len(tokenized_documents)/(sum(contains_token)))
-    return idf_values
+def clusterIndicatorsByW2V(p_ind_file, vectors_file, hdbscan_results_file, min_cluster_size):
+    """
 
-def classifyIndicators(hdbscan_results_file, vectors_file, hdbscan_results_classified_file, 
+    :param p_ind_file: файл с показателями которые будем кластеризовать
+    :param vectors_file: файл с моделью word2vec
+    :param hdbscan_results_file: файл куда будут записаны результаты
+    :param min_cluster_size: минимальный размер кластера для алгоритма HDBScan
+    :return: None  НО  запишет результаты кластеризации в файл hdbscan_results_file
+    """
+    # load indicators
+    pkl_file = open(p_ind_file + ".pkl", "rb")
+    inds = pickle.load(pkl_file)
+    pkl_file.close()
+
+    # print("\n Vertex cont >>", len(hier_graph.vs))
+
+    # feature creation
+
+    model = KeyedVectors.load_word2vec_format(vectors_file, binary=True)
+
+    features = []
+
+    print(hier_graph.vs["inds_cnt"][0:10])
+
+    for i in inds:
+
+        # l_ind_vector = model.word_vec(i[2][0])
+        l_ind_vector_pos = model.word_vec(i[2][0])
+
+        for k in range(1, len(i[2])):
+            if i[2][k] in model.vocab:
+                # l_ind_vector = np.add(l_ind_vector, model.word_vec(i[2][k]))
+                if np.core.multiarray.dot(l_ind_vector, model.word_vec(i[2][k])) > 0:  # скалярное произведение векторов
+                    l_ind_vector_pos = np.add(l_ind_vector_pos, model.word_vec(i[2][k]))
+                else:  # ноль можно трактовать как угодно только не 0, поэтому не использую sign
+                    l_ind_vector_pos = np.add(l_ind_vector_pos, -1.0 * model.word_vec(i[2][k]))
+
+        # features_w2v.append(l_ind_vector)
+        # features_w2v_pos.append(l_ind_vector_pos)
+        features.append(l_ind_vector_pos)
+        # features.append([(lognormal(hier_graph.vs["inds_cnt"][j], 2.7, 1) * 1000)
+        #                  if i[3].get(j) is not None else 0
+        #                  for j in range(0, len(hier_graph.vs))
+        #                  if j not in [0]
+        #                  ]
+        #                 )
+
+    # HDBSCAN -- algoritm -----------------------------------------------------------
+    # clustering
+
+    clusterer = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size, metric='pyfunc', func=cu.cosine_metric)
+    clusterer.fit_predict(features)
+
+    # clusters indicators
+    cl_inds = [[inds[j][0], inds[j][1], inds[j][2], clusterer.labels_[j]] for j in range(len(inds))]
+
+    # write indicators to csv
+    df = pd.DataFrame(cl_inds)
+    df.to_csv(hdbscan_results_file + ".csv", index=False, header=True, encoding="utf-8")
+    print("Indicators clustering results saved in ", hdbscan_results_file + ".csv")
+
+    output = open(hdbscan_results_file + ".pkl", "wb")
+    pickle.dump(cl_inds, output)
+    output.close()
+
+
+#--------------------------------------------------------------------------
+
+def classifyIndicators(hdbscan_results_file, vectors_file, hdbscan_results_classified_file,
                        noise_output_file=False):
     pkl_file = open(hdbscan_results_file+".pkl", "rb")
     inds = pickle.load(pkl_file)
@@ -825,7 +887,7 @@ def classifyIndicators(hdbscan_results_file, vectors_file, hdbscan_results_class
     
     classified_data = []
     all_inds_lemmas = [ind[2] for cluster in clusters_data for ind in cluster] + [ind[2] for ind in noise_data]
-    idf = getIdf(all_inds_lemmas)
+    idf = cu.getIdf(all_inds_lemmas)
     
     model = KeyedVectors.load_word2vec_format(vectors_file, binary=True)
     new_clusters = {}
@@ -838,10 +900,10 @@ def classifyIndicators(hdbscan_results_file, vectors_file, hdbscan_results_class
                 lemm_vectors = [model[lemm] for lemm in ind[2] if lemm in model.vocab]
                 lemm_weights = [idf[lemm] for lemm in ind[2] if lemm in model.vocab]
                 if len(lemm_vectors) > 0:
-                    sentence_vector = makeAverageVector(lemm_vectors, lemm_weights)
+                    sentence_vector = cu.makeAverageVector(lemm_vectors, lemm_weights)
                     sentence_vectors.append(sentence_vector)
                     ind_vec[ind[0]] = sentence_vector
-        cluster_vector = makeAverageVector(sentence_vectors)
+        cluster_vector = cu.makeAverageVector(sentence_vectors)
     
         clean_cluster = []
         clean_ind_vec = []
@@ -853,7 +915,7 @@ def classifyIndicators(hdbscan_results_file, vectors_file, hdbscan_results_class
                 else:
                     noise_data.append([ind[0], ind[1], ind[2], -1, []])
         if len(clean_ind_vec) > 0:
-            clean_cluster_vector = makeAverageVector(clean_ind_vec)
+            clean_cluster_vector = cu.makeAverageVector(clean_ind_vec)
             
             new_clusters[cluster[0][3]] = [clean_cluster_vector, clean_cluster]
     
@@ -864,7 +926,7 @@ def classifyIndicators(hdbscan_results_file, vectors_file, hdbscan_results_class
         print(prev_cluster, cluster, sim)
         if sim >= 0.85:
             new_clusters[prev_cluster][1] += new_clusters[cluster][1]
-            new_clusters[prev_cluster][0] = makeAverageVector([new_clusters[prev_cluster][0], new_clusters[cluster][0]])
+            new_clusters[prev_cluster][0] = cu.makeAverageVector([new_clusters[prev_cluster][0], new_clusters[cluster][0]])
             del new_clusters[cluster]
         else:
             prev_cluster = cluster
@@ -885,7 +947,7 @@ def classifyIndicators(hdbscan_results_file, vectors_file, hdbscan_results_class
     for i, text, lemmas, n, kw in noise_data:
         lemm_vectors = [model[lemm] for lemm in lemmas if lemm in model.vocab]
         lemm_weights = [idf[lemm] for lemm in lemmas if lemm in model.vocab]
-        sentence_vector = makeAverageVector(lemm_vectors, lemm_weights)
+        sentence_vector = cu.makeAverageVector(lemm_vectors, lemm_weights)
         
         for cl in new_clusters:
             if cosine_similarity([sentence_vector], [new_clusters[cl][0]])[0] >= 0.9:
@@ -1075,6 +1137,87 @@ def main():
     print("Done")
     end_time = time.time()
     print("--- %s seconds ---" % (end_time - start_time))
+
+
+# --------------------------------------------------------------------------
+
+
+def main_edu():
+    m = Mystem()
+    stemmer = SnowballStemmer("russian")
+    term_extractor = TermExtractor()
+
+    #Настраиваем параметры эксперимента
+    l_exp_conf = exp_conf.getExperimentConfigByName('edu_gen')
+    path = l_exp_conf['path']
+    max_inds_count = l_exp_conf['max_inds_count']
+    prefix = l_exp_conf['prefix']
+    suffix = l_exp_conf['suffix']
+    start_th = l_exp_conf['start_th']  # start threshold for fuzzy graph
+    in_file = l_exp_conf['in_file']
+
+
+    #Настраиваем общие параметры
+    stopwords_file = "data/" + "Стоп слова Топонимы.xlsx"
+    vectors_file = "data/" + "ruwikiruscorpora_0_300_20.bin"
+    # vectors_file = path+"wiki.ru.vec" #fasttext
+    tags_dict_file = "data/" + "tags_dict.txt"
+
+    # ind_file = path+prefix+suffix+".pkl"
+    ind_file = path + prefix + "ds.pkl"
+    words_freq_file = path + prefix + "words_freq_"+ suffix + ".csv"
+    words_ds_file = path + prefix + "words_ds_" + suffix + ".pkl"
+    words_dict_file = path + prefix + "words_" + suffix + ".pkl"
+    graph_file_name_pref = path + prefix + "words_graph_" + suffix + "_th_"
+    hier_graph_file = path + prefix + "words_hier_graph_" + suffix + "_th_" + str(round(start_th * 100)) + ".graphml"
+    clustering_results_file = path + prefix + "hier_" + suffix + "_th_" + str(round(start_th * 100))
+    # sphere_graph_file = path+prefix+"words_sphere_graph_"+suffix+"_th_"+str(round(start_th*100))+".graphml"
+    # sphere_graph_by_nodes_file = path+prefix+"words_sphere_graph_"+suffix+"_th_"+str(round(start_th*100))+"_69.graphml"
+
+    hdbscan_results_file = path + prefix + suffix + "_th_" + str(round(start_th * 100)) + "_hdbscan"
+    hdbscan_results_classified_file = path + prefix + suffix + "_th_" + str(
+        round(start_th * 100)) + "_hdbscan_classified"
+    noise_output_file = path + prefix + suffix + "_th_" + str(round(start_th * 100)) + "_noise"
+    merged_file = path + prefix + suffix + "_th_" + str(round(start_th * 100)) + "_hdbscan_classified_merged"
+    keyterms_file = path + prefix + suffix + "_th_" + str(round(start_th * 100)) + "_hdbscan_classified_keyterms.csv"
+
+    print("--- Start time %s ---" % strftime("%a, %d %b %Y %H:%M:%S", gmtime()))
+    start_time = time.time()
+
+    # createIndicatorsDataset(m, stemmer, max_inds_count, stopwords_file, in_file, tags_dict_file, ind_file)
+
+    createWordsDataset(m, ind_file, vectors_file, words_freq_file, words_ds_file, words_dict_file)
+
+    constructGraph(start_th, words_ds_file, words_dict_file, graph_file_name_pref)
+
+    hier_graph = doGraphHierarchicalClustering(start_th, max_inds_count, graph_file_name_pref, hier_graph_file)
+
+    doIndicatorsFuzzyClustering(hier_graph, max_inds_count, ind_file, clustering_results_file)
+
+    #testHierarchicalClusteringResults(hier_graph_file, clustering_results_file)
+
+    addGraphProperties(hier_graph_file, clustering_results_file)
+
+    #transformToSphereGraph(hier_graph_file, sphere_graph_file)
+
+    #getRelatedIndicatorsByNode(nodes, sphere_graph_file, clustering_results_file, sphere_graph_by_nodes_file)
+
+
+    """
+    clusterIndicators(hier_graph_file, clustering_results_file, hdbscan_results_file, min_cluster_size=18)
+
+    classifyIndicators(hdbscan_results_file, vectors_file, hdbscan_results_classified_file, noise_output_file)
+
+    clusterNoise(m, noise_output_file, path, prefix, suffix, start_th, vectors_file, min_cluster_size=8)
+
+    mergeClusteredNoise(hdbscan_results_classified_file, noise_output_file, merged_file)
+
+    extractKeyterms(term_extractor, merged_file, keyterms_file)
+    """
+
+    print("Done")
+    end_time = time.time()
+    print("--- %s seconds ---" % (end_time - start_time))
     
 if __name__ == "__main__":
-    main()
+    main_edu()

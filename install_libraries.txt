@@ -1,0 +1,12 @@
+
+
+
+
+pip install pyaspeller
+pip install gensim
+conda install -c conda-forge hdbscan
+
+pip install rutermextract  #тут проблема с кодировкой поэтмому надо качать архив и в setp.py заменять строку на long_description = open('README.rst', encoding="utf8").read(),
+pip install D:\Projects\SentenceClustering\data\rutermextract-0.2
+
+pip install seaborn
