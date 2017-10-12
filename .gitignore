@@ -1,0 +1,7 @@
+*.zip
+*.bin
+*.gz
+data/
+edu_inds_clustering/
+log/
+__pycache__/
